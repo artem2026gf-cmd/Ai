@@ -1,0 +1,1131 @@
+-- Lua / Luau, Roblox, LocalScript
+-- Часть 1: Утилиты, инициализация, настройка GUI-каркаса
+-- ВНИМАНИЕ: Скрипт не запустится, пока не скопируешь все 15 частей!
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- ============================================================
+-- УТИЛИТЫ
+-- ============================================================
+local Util = {}
+
+-- Быстрый рандом для весов (Gaussian)
+function Util.randomWeight()
+    -- Box-Muller для нормального распределения
+    local u1 = math.random()
+    local u2 = math.random()
+    return math.sqrt(-2 * math.log(u1 + 1e-9)) * math.cos(2 * math.pi * u2) * 0.1
+end
+
+-- Создание массива
+function Util.createArray(size, fill)
+    local arr = table.create(size)
+    for i = 1, size do
+        arr[i] = fill or 0
+    end
+    return arr
+end
+
+-- Создание матрицы (2D)
+function Util.createMatrix(rows, cols)
+    local m = table.create(rows)
+    for i = 1, rows do
+        m[i] = Util.createArray(cols, 0)
+    end
+    return m
+end
+
+-- Функция активации ReLU
+function Util.relu(x)
+    return x > 0 and x or 0
+end
+
+-- Производная ReLU
+function Util.reluDeriv(x)
+    return x > 0 and 1 or 0
+end
+
+-- Функция активации Sigmoid
+function Util.sigmoid(x)
+    return 1 / (1 + math.exp(-x))
+end
+
+-- Softmax для выходного слоя (вероятности слов)
+function Util.softmax(arr)
+    local max = -math.huge
+    for i = 1, #arr do
+        if arr[i] > max then max = arr[i] end
+    end
+    local sum = 0
+    local out = table.create(#arr)
+    for i = 1, #arr do
+        out[i] = math.exp(arr[i] - max)
+        sum = sum + out[i]
+    end
+    for i = 1, #arr do
+        out[i] = out[i] / sum
+    end
+    return out
+end
+
+-- Выбор по вероятностям (Sampling)
+function Util.sample(probs, temp)
+    temp = temp or 1.0
+    local sum = 0
+    local scaled = table.create(#probs)
+    for i = 1, #probs do
+        scaled[i] = math.pow(probs[i], 1 / temp)
+        sum = sum + scaled[i]
+    end
+    local r = math.random() * sum
+    local acc = 0
+    for i = 1, #probs do
+        acc = acc + scaled[i]
+        if acc >= r then return i end
+    end
+    return #probs
+end
+
+-- Логирование
+local function log(msg)
+    print("[AI] " .. tostring(msg))
+end
+
+log("Часть 1 загружена. Ожидание остальных частей...")
+-- ============================================================
+-- ЧАСТЬ 2: GUI КАРКАС
+-- ============================================================
+local gui = Instance.new("ScreenGui")
+gui.Name = "ThinkChatAI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Главная панель
+local panel = Instance.new("Frame")
+panel.Name = "MainPanel"
+panel.Size = UDim2.fromOffset(360, 460)
+panel.Position = UDim2.new(0, 20, 0.5, -230)
+panel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+panel.BackgroundTransparency = 0.05
+panel.BorderSizePixel = 0
+panel.Active = true
+panel.Draggable = true
+panel.Parent = gui
+
+local corner = Instance.new("UICorner", panel)
+corner.CornerRadius = UDim.new(0, 12)
+
+local stroke = Instance.new("UIStroke", panel)
+stroke.Color = Color3.fromRGB(130, 90, 255)
+stroke.Thickness = 1.5
+stroke.Transparency = 0.3
+
+-- Заголовок
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 36)
+header.BackgroundColor3 = Color3.fromRGB(24, 24, 34)
+header.BorderSizePixel = 0
+header.Parent = panel
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -40, 1, 0)
+title.Position = UDim2.fromOffset(12, 0)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+title.TextColor3 = Color3.fromRGB(220, 210, 255)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "neuro-chat · 1MB"
+title.Parent = header
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.fromOffset(24, 24)
+closeBtn.Position = UDim2.new(1, -30, 0, 6)
+closeBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 40)
+closeBtn.BorderSizePixel = 0
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 12
+closeBtn.TextColor3 = Color3.fromRGB(255, 150, 150)
+closeBtn.Text = "x"
+closeBtn.Parent = header
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+
+-- Скролл сообщений
+local scroll = Instance.new("ScrollingFrame")
+scroll.Size = UDim2.new(1, -16, 1, -120)
+scroll.Position = UDim2.fromOffset(8, 44)
+scroll.BackgroundTransparency = 1
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 4
+scroll.ScrollBarImageColor3 = Color3.fromRGB(130, 90, 255)
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scroll.Parent = panel
+
+local list = Instance.new("UIListLayout")
+list.Padding = UDim.new(0, 8)
+list.SortOrder = Enum.SortOrder.LayoutOrder
+list.Parent = scroll
+
+-- Поле ввода
+local inputFrame = Instance.new("Frame")
+inputFrame.Size = UDim2.new(1, -16, 0, 36)
+inputFrame.Position = UDim2.new(0, 8, 1, -80)
+inputFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 34)
+inputFrame.BorderSizePixel = 0
+inputFrame.Parent = panel
+Instance.new("UICorner", inputFrame).CornerRadius = UDim.new(0, 8)
+
+local textBox = Instance.new("TextBox")
+textBox.Size = UDim2.new(1, -70, 1, 0)
+textBox.Position = UDim2.fromOffset(10, 0)
+textBox.BackgroundTransparency = 1
+textBox.Font = Enum.Font.GothamMedium -- Medium лучше держит кириллицу
+textBox.TextSize = 13
+textBox.TextColor3 = Color3.fromRGB(230, 230, 240)
+textBox.PlaceholderText = "напиши что-нибудь..."
+textBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 140)
+textBox.TextXAlignment = Enum.TextXAlignment.Left
+textBox.ClearTextOnFocus = false
+textBox.Text = ""
+textBox.Parent = inputFrame
+
+local sendBtn = Instance.new("TextButton")
+sendBtn.Size = UDim2.fromOffset(56, 26)
+sendBtn.Position = UDim2.new(1, -62, 0.5, -13)
+sendBtn.BackgroundColor3 = Color3.fromRGB(130, 90, 255)
+sendBtn.BorderSizePixel = 0
+sendBtn.Font = Enum.Font.GothamBold
+sendBtn.TextSize = 12
+sendBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+sendBtn.Text = "send"
+sendBtn.Parent = inputFrame
+Instance.new("UICorner", sendBtn).CornerRadius = UDim.new(0, 6)
+
+-- Статус (память, нейроны, loss)
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -16, 0, 20)
+status.Position = UDim2.new(0, 8, 1, -38)
+status.BackgroundTransparency = 1
+status.Font = Enum.Font.GothamMedium
+status.TextSize = 11
+status.TextColor3 = Color3.fromRGB(140, 140, 160)
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Text = "Инициализация нейронов..."
+status.Parent = panel
+
+log("Часть 2 загружена: GUI готов.")
+-- ============================================================
+-- ЧАСТЬ 3: ТОКЕНИЗАТОР И СЛОВАРЬ
+-- ============================================================
+local Vocab = {
+    words = {},       -- слово -> индекс (ID)
+    reverse = {},     -- индекс -> слово
+    size = 0,
+    maxSize = 2000,   -- Ограничим словарь, чтобы не сожрал память
+}
+
+function Vocab:add(word)
+    if self.words[word] then return self.words[word] end
+    if self.size >= self.maxSize then return 1 end -- 1 = <unk>
+    
+    self.size = self.size + 1
+    self.words[word] = self.size
+    self.reverse[self.size] = word
+    return self.size
+end
+
+function Vocab:get(word)
+    return self.words[word] or 1 -- 1 = <unk>
+end
+
+function Vocab:getWord(id)
+    return self.reverse[id] or "<unk>"
+end
+
+-- Добавляем служебные токены
+Vocab:add("<unk>")  -- Индекс 1
+Vocab:add("<pad>")  -- Индекс 2 (для выравнивания длины)
+Vocab:add(".")      -- Индекс 3 (конец предложения)
+
+-- Токенизатор для русского и английского
+local function tokenize(text)
+    local out = {}
+    text = text:lower()
+    
+    local current = {}
+    for i = 1, #text do
+        local b = text:byte(i)
+        -- ASCII буквы/цифры
+        if (b >= 97 and b <= 122) or (b >= 48 and b <= 57) then
+            table.insert(current, string.char(b))
+        -- Кириллица (UTF-8)
+        elseif b == 208 or b == 209 then
+            local next_b = text:byte(i + 1)
+            if next_b and next_b >= 128 and next_b <= 191 then
+                table.insert(current, string.sub(text, i, i + 1))
+                i = i + 1
+            end
+        else
+            -- Разделитель
+            if #current > 0 then
+                table.insert(out, table.concat(current))
+                current = {}
+            end
+        end
+    end
+    if #current > 0 then table.insert(out, table.concat(current)) end
+    
+    -- Ограничиваем длину ввода (контекст)
+    if #out > 20 then
+        local short = {}
+        for i = #out - 19, #out do
+            table.insert(short, out[i])
+        end
+        out = short
+    end
+    
+    return out
+end
+
+log("Часть 3 загружена: Токенизатор и Словарь готовы.")
+-- ============================================================
+-- ЧАСТЬ 4: АРХИТЕКТУРА (ЭМБЕДДИНГИ И СЛОЙ)
+-- ============================================================
+local Embedding = {}
+Embedding.__index = Embedding
+
+function Embedding.new(vocabSize, embedDim)
+    local self = setmetatable({}, Embedding)
+    self.vocabSize = vocabSize
+    self.embedDim = embedDim
+    
+    -- Матрица весов: vocabSize x embedDim
+    self.weights = Util.createMatrix(vocabSize, embedDim)
+    for i = 1, vocabSize do
+        for j = 1, embedDim do
+            self.weights[i][j] = Util.randomWeight()
+        end
+    end
+    return self
+end
+
+function Embedding:forward(id)
+    -- Возвращаем вектор эмбеддинга для ID
+    local vec = table.create(self.embedDim)
+    local row = self.weights[id]
+    for i = 1, self.embedDim do
+        vec[i] = row[i]
+    end
+    return vec
+end
+
+-- ============================================================
+-- Линейный слой (Dense / Linear)
+-- ============================================================
+local Dense = {}
+Dense.__index = Dense
+
+function Dense.new(inFeatures, outFeatures, activation)
+    local self = setmetatable({}, Dense)
+    self.inFeatures = inFeatures
+    self.outFeatures = outFeatures
+    self.activation = activation or "relu"
+    
+    self.weights = Util.createMatrix(outFeatures, inFeatures)
+    self.biases = Util.createArray(outFeatures, 0)
+    
+    for i = 1, outFeatures do
+        for j = 1, inFeatures do
+            self.weights[i][j] = Util.randomWeight()
+        end
+        self.biases[i] = 0.01
+    end
+    
+    -- Кэш для backprop
+    self.lastInput = {}
+    self.lastOutput = {}
+    self.lastZ = {}
+    return self
+end
+
+function Dense:forward(input)
+    self.lastInput = input
+    
+    local out = Util.createArray(self.outFeatures, 0)
+    local z = Util.createArray(self.outFeatures, 0)
+    
+    -- Z = W * X + B
+    for i = 1, self.outFeatures do
+        local sum = self.biases[i]
+        local row = self.weights[i]
+        for j = 1, self.inFeatures do
+            sum = sum + row[j] * input[j]
+        end
+        z[i] = sum
+        
+        if self.activation == "relu" then
+            out[i] = Util.relu(sum)
+        elseif self.activation == "sigmoid" then
+            out[i] = Util.sigmoid(sum)
+        else
+            out[i] = sum
+        end
+    end
+    
+    self.lastZ = z
+    self.lastOutput = out
+    return out
+end
+-- ============================================================
+-- ЧАСТЬ 5: СБОРКА МОДЕЛИ (Оркестратор)
+-- ============================================================
+local NeuralNet = {}
+NeuralNet.__index = NeuralNet
+
+function NeuralNet.new(vocabSize, embedDim, hiddenDim, contextSize)
+    local self = setmetatable({}, NeuralNet)
+    self.vocabSize = vocabSize
+    self.embedDim = embedDim
+    self.hiddenDim = hiddenDim
+    self.contextSize = contextSize
+    
+    -- 1. Слой эмбеддингов
+    self.embedding = Embedding.new(vocabSize, embedDim)
+    
+    -- 2. Линейный слой для сборки контекста (Flatten: contextSize * embedDim -> hiddenDim)
+    self.hidden = Dense.new(contextSize * embedDim, hiddenDim, "relu")
+    
+    -- 3. Выходной слой (hiddenDim -> vocabSize)
+    self.output = Dense.new(hiddenDim, vocabSize, "none")
+    
+    -- Гиперпараметры
+    self.learningRate = 0.01
+    return self
+end
+
+function NeuralNet:forward(contextIds)
+    -- contextIds: таблица из N ID (длина = contextSize)
+    -- 1. Получаем эмбеддинги для каждого ID и склеиваем
+    local flat = {}
+    for i = 1, self.contextSize do
+        local id = contextIds[i] or 2 -- <pad> если пусто
+        local emb = self.embedding:forward(id)
+        for j = 1, self.embedDim do
+            table.insert(flat, emb[j])
+        end
+    end
+    
+    -- 2. Проходим через скрытый слой
+    local h = self.hidden:forward(flat)
+    
+    -- 3. Получаем логиты (выходной слой)
+    local logits = self.output:forward(h)
+    
+    -- 4. Softmax для вероятностей
+    local probs = Util.softmax(logits)
+    
+    return probs
+end
+
+log("Часть 5 загружена: Архитектура сети собрана (в памяти).")
+-- ============================================================
+-- ЧАСТЬ 6: BACKPROPAGATION (ОБРАТНЫЙ ПРОХОД ДЛЯ DENSE)
+-- ============================================================
+
+-- Добавляем метод backward в Dense
+function Dense:backward(outputGradient, lr)
+    -- outputGradient: dL/dOut (размер outFeatures)
+    -- Возвращаем inputGradient: dL/dInput (размер inFeatures)
+    
+    local inputGradient = Util.createArray(self.inFeatures, 0)
+    local dZ = Util.createArray(self.outFeatures, 0)
+    
+    -- 1. dZ = dOut * activation'(Z)
+    for i = 1, self.outFeatures do
+        if self.activation == "relu" then
+            dZ[i] = outputGradient[i] * Util.reluDeriv(self.lastZ[i])
+        elseif self.activation == "sigmoid" then
+            local s = Util.sigmoid(self.lastZ[i])
+            dZ[i] = outputGradient[i] * s * (1 - s)
+        else
+            dZ[i] = outputGradient[i] -- linear
+        end
+    end
+    
+    -- 2. Обновляем веса и считаем градиент по входу
+    for i = 1, self.outFeatures do
+        local dz = dZ[i]
+        if dz ~= 0 then
+            -- Обновляем bias
+            self.biases[i] = self.biases[i] - lr * dz
+            
+            -- Обновляем веса и копим inputGradient
+            local row = self.weights[i]
+            for j = 1, self.inFeatures do
+                -- dL/dW = dZ * Input
+                local gradW = dz * self.lastInput[j]
+                self.weights[i][j] = row[j] - lr * gradW
+                
+                -- dL/dInput += W * dZ
+                inputGradient[j] = inputGradient[j] + row[j] * dz
+            end
+        end
+    end
+    
+    return inputGradient
+end
+-- ============================================================
+-- ЧАСТЬ 7: ФУНКЦИЯ ПОТЕРЬ И ОБУЧЕНИЕ
+-- ============================================================
+
+-- Добавляем метод train в NeuralNet
+function NeuralNet:train(contextIds, targetId, lr)
+    lr = lr or self.learningRate
+    
+    -- 1. FORWARD PASS (запоминаем состояние)
+    local flat = {}
+    for i = 1, self.contextSize do
+        local id = contextIds[i] or 2
+        local emb = self.embedding:forward(id)
+        for j = 1, self.embedDim do
+            table.insert(flat, emb[j])
+        end
+    end
+    
+    local h = self.hidden:forward(flat)
+    local logits = self.output:forward(h)
+    local probs = Util.softmax(logits)
+    
+    -- 2. CROSS-ENTROPY LOSS
+    -- Loss = -log(prob[target])
+    local p = math.max(probs[targetId], 1e-7)
+    local loss = -math.log(p)
+    
+    -- 3. ГРАДИЕНТ ОТ ВЫХОДА
+    -- dL/dLogits = probs - one_hot(target)
+    local dLogits = table.create(self.vocabSize)
+    for i = 1, self.vocabSize do
+        dLogits[i] = probs[i] - (i == targetId and 1 or 0)
+    end
+    
+    -- 4. BACKWARD PASS
+    local dHidden = self.output:backward(dLogits, lr)
+    local dFlat = self.hidden:backward(dHidden, lr)
+    
+    -- 5. ОБНОВЛЕНИЕ ЭМБЕДДИНГОВ
+    -- dFlat разбит на куски по embedDim для каждого слова в контексте
+    local idx = 1
+    for i = 1, self.contextSize do
+        local id = contextIds[i] or 2
+        for j = 1, self.embedDim do
+            local grad = dFlat[idx]
+            if grad ~= 0 then
+                -- Обновляем эмбеддинг для этого слова
+                self.embedding.weights[id][j] = self.embedding.weights[id][j] - lr * grad
+            end
+            idx = idx + 1
+        end
+    end
+    
+    return loss
+end
+
+-- Безопасный вызов train с pcall (защита от NaN)
+function NeuralNet:safeTrain(contextIds, targetId, lr)
+    local success, loss = pcall(function()
+        return self:train(contextIds, targetId, lr)
+    end)
+    
+    if success and type(loss) == "number" and loss == loss then
+        return loss
+    else
+        return 0
+    end
+end
+
+log("Часть 7 загружена: Механика обучения готова.")
+-- ============================================================
+-- ЧАСТЬ 8: БУФЕР ПАМЯТИ (REPLAY BUFFER)
+-- ============================================================
+local ReplayBuffer = {}
+ReplayBuffer.__index = ReplayBuffer
+
+function ReplayBuffer.new(maxSize)
+    local self = setmetatable({}, ReplayBuffer)
+    self.maxSize = maxSize or 2000
+    self.data = {}      -- {context = {ids}, target = id}
+    self.size = 0
+    return self
+end
+
+function ReplayBuffer:add(context, target)
+    self.size = self.size + 1
+    if self.size > self.maxSize then
+        -- Выкидываем старые (FIFO)
+        table.remove(self.data, 1)
+        self.size = self.size - 1
+    end
+    table.insert(self.data, {context = context, target = target})
+end
+
+function ReplayBuffer:sampleBatch(batchSize)
+    if #self.data == 0 then return {} end
+    local batch = {}
+    for i = 1, batchSize do
+        local idx = math.random(1, #self.data)
+        table.insert(batch, self.data[idx])
+    end
+    return batch
+end
+
+function ReplayBuffer:empty()
+    return #self.data == 0
+end
+
+-- ============================================================
+-- ОБУЧЕНИЕ НА БУФЕРЕ (BATCH TRAIN)
+-- ============================================================
+-- Эта функция будет вызываться в фоне, чтобы модель училась пока ты играешь
+local function trainOnBuffer(net, buffer, epochs, batchSize)
+    if buffer:empty() then return 0 end
+    
+    local totalLoss = 0
+    local steps = 0
+    
+    for epoch = 1, epochs do
+        local batch = buffer:sampleBatch(batchSize)
+        for _, sample in ipairs(batch) do
+            local loss = net:safeTrain(sample.context, sample.target, net.learningRate)
+            totalLoss = totalLoss + loss
+            steps = steps + 1
+            
+            -- Защита от фризов: отдаем поток раз в 10 шагов
+            if steps % 10 == 0 then
+                task.wait()
+            end
+        end
+    end
+    
+    if steps == 0 then return 0 end
+    return totalLoss / steps
+end
+-- ============================================================
+-- ЧАСТЬ 9: ГЕНЕРАТОР ТЕКСТА (ИНФЕРЕНС)
+-- ============================================================
+
+-- Генерирует ответ на основе входного текста
+function NeuralNet:generate(inputText, maxTokens, temperature)
+    local net = self
+    local context = {} -- текущий контекст (ID)
+    
+    -- 1. Токенизируем вход
+    local words = tokenize(inputText)
+    
+    -- Заполняем контекст (если слов меньше, чем contextSize, добиваем <pad>)
+    for i = 1, self.contextSize do
+        local w = words[#words - self.contextSize + i]
+        if w then
+            table.insert(context, Vocab:get(w))
+        else
+            table.insert(context, 2) -- <pad>
+        end
+    end
+    
+    local outputWords = {}
+    
+    -- 2. Генерируем по одному слову
+    for i = 1, maxTokens do
+        local probs = net:forward(context)
+        
+        -- Выбор токена
+        local tokenId = Util.sample(probs, temperature)
+        
+        -- Если сгенерировали <pad> или <unk>, пропускаем
+        if tokenId ~= 2 and tokenId ~= 1 then
+            local word = Vocab:getWord(tokenId)
+            table.insert(outputWords, word)
+            
+            -- Если точка — заканчиваем
+            if word == "." or word == "!" or word == "?" then
+                break
+            end
+        end
+        
+        -- Сдвигаем контекст (убираем старый, добавляем новый)
+        table.remove(context, 1)
+        table.insert(context, tokenId)
+        
+        -- Даем потоку вздохнуть
+        task.wait()
+    end
+    
+    -- 3. Собираем строку
+    if #outputWords == 0 then return "..." end
+    local res = table.concat(outputWords, " ")
+    
+    -- Капитализация (первая буква)
+    local first = res:byte(1)
+    if first and first >= 97 and first <= 122 then
+        res = res:gsub("^%l", string.upper)
+    elseif first and (first == 208 or first == 209) then
+        -- Для кириллицы оставляем как есть, чтобы не сломать байты
+    end
+    
+    if not res:match("[%.%!%?]$") then res ..= "." end
+    return res
+end
+
+log("Часть 9 загружена: Генератор и Буфер памяти готовы.")
+-- ============================================================
+-- ЧАСТЬ 10: ИНИЦИАЛИЗАЦИЯ МОДЕЛИ
+-- ============================================================
+
+-- Параметры модели (подобраны под 1 МБ оперативной памяти)
+-- EmbedDim 16, Hidden 64, Context 5. 
+-- Словарь 2000. Весов: (5*16)*64 + 64*2000 = 5120 + 128000 = ~133k весов. 
+-- Это ~0.5-1 МБ в памяти Luau. Идеально.
+local aiModel
+local buffer
+
+local function initAI()
+    log("Инициализация нейросети...")
+    
+    -- Создаем словарь до конца (резервируем место)
+    -- В реальности словарь растет по мере ввода, но мы задаем лимит.
+    
+    aiModel = NeuralNet.new(Vocab.maxSize, 16, 64, 5)
+    buffer = ReplayBuffer.new(3000)
+    
+    -- Обучение "алфавиту" (чтобы модель не выдавала чистый рандом в начале)
+    -- Прогоняем пару пустых примеров, чтобы Softmax привык
+    local padContext = {2, 2, 2, 2, 2} -- <pad>
+    for i = 1, 10 do
+        aiModel:safeTrain(padContext, 3, 0.01) -- 3 = "."
+    end
+    
+    log("Нейросеть готова к диалогу.")
+    status.Text = "Сеть готова · ожидание ввода"
+end
+
+-- Вызовем инициализацию сразу
+task.spawn(function()
+    task.wait(1) -- Дадим GUI прогрузиться
+    initAI()
+end)
+-- ============================================================
+-- ЧАСТЬ 11: СВЯЗКА GUI С НЕЙРОСЕТЬЮ
+-- ============================================================
+
+-- Хелпер для добавления сообщения в чат
+local function addMessage(text, isUser)
+    local msg = Instance.new("Frame")
+    msg.Size = UDim2.new(1, 0, 0, 0)
+    msg.AutomaticSize = Enum.AutomaticSize.Y
+    msg.BackgroundTransparency = 1
+    msg.Parent = scroll
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 0)
+    label.AutomaticSize = Enum.AutomaticSize.Y
+    label.BackgroundColor3 = isUser and Color3.fromRGB(45, 45, 70) or Color3.fromRGB(30, 30, 45)
+    label.BackgroundTransparency = 0.2
+    label.BorderSizePixel = 0
+    label.Font = Enum.Font.GothamMedium
+    label.TextSize = 13
+    label.TextColor3 = isUser and Color3.fromRGB(200, 200, 255) or Color3.fromRGB(220, 210, 255)
+    label.TextWrapped = true
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextYAlignment = Enum.TextYAlignment.Top
+    label.Text = "  " .. text .. "  "
+    label.Parent = msg
+    Instance.new("UICorner", label).CornerRadius = UDim.new(0, 6)
+    
+    local pad = Instance.new("UIPadding", label)
+    pad.PaddingTop = UDim.new(0, 6)
+    pad.PaddingBottom = UDim.new(0, 6)
+    pad.PaddingLeft = UDim.new(0, 4)
+    pad.PaddingRight = UDim.new(0, 4)
+
+    task.wait()
+    scroll.CanvasPosition = Vector2.new(0, scroll.AbsoluteCanvasSize.Y)
+end
+
+-- Индикатор "печатает..."
+local function showTyping()
+    local msg = Instance.new("Frame")
+    msg.Size = UDim2.new(1, 0, 0, 0)
+    msg.AutomaticSize = Enum.AutomaticSize.Y
+    msg.BackgroundTransparency = 1
+    msg.Parent = scroll
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 30)
+    label.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+    label.BackgroundTransparency = 0.2
+    label.BorderSizePixel = 0
+    label.Font = Enum.Font.GothamMedium
+    label.TextSize = 13
+    label.TextColor3 = Color3.fromRGB(160, 160, 180)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Text = "  нейросеть думает..."
+    label.Parent = msg
+    Instance.new("UICorner", label).CornerRadius = UDim.new(0, 6)
+    local pad = Instance.new("UIPadding", label)
+    pad.PaddingTop = UDim.new(0, 6)
+    pad.PaddingBottom = UDim.new(0, 6)
+    pad.PaddingLeft = UDim.new(0, 4)
+    pad.PaddingRight = UDim.new(0, 4)
+    
+    task.wait()
+    scroll.CanvasPosition = Vector2.new(0, scroll.AbsoluteCanvasSize.Y)
+    return msg
+end
+
+-- Главная функция отправки
+local function onSend()
+    if not aiModel then
+        addMessage("Сеть еще грузится, подожди...", false)
+        return
+    end
+
+    local text = textBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then return end
+    textBox.Text = ""
+
+    -- 1. Показываем сообщение пользователя
+    addMessage(text, true)
+
+    -- 2. Подготовка к обучению (добавляем в буфер)
+    local words = tokenize(text)
+    for i = 1, #words do
+        Vocab:add(words[i])
+    end
+    
+    -- Учим нейросеть предсказывать следующее слово в этом тексте
+    for i = 1, #words - 1 do
+        local ctx = {}
+        for j = 1, 5 do
+            local idx = i - 5 + j
+            if idx >= 1 and words[idx] then
+                table.insert(ctx, Vocab:get(words[idx]))
+            else
+                table.insert(ctx, 2) -- <pad>
+            end
+        end
+        buffer:add(ctx, Vocab:get(words[i+1]))
+    end
+
+    -- 3. Индикатор печати и генерация
+    local typingMsg = showTyping()
+
+    task.spawn(function()
+        -- Даем модели время "подумать" (эмуляция)
+        task.wait(math.random(50, 120) / 100)
+        
+        -- Генерируем ответ
+        local answer = aiModel:generate(text, 10, 0.8)
+        
+        -- Убираем индикатор и показываем ответ
+        typingMsg:Destroy()
+        addMessage(answer, false)
+        
+        -- Обновляем статус
+        status.Text = string.format("Сеть: %d слов | Буфер: %d", Vocab.size, buffer.size)
+        
+        -- Фоновое обучение (чтобы не лагало GUI)
+        task.spawn(function()
+            local loss = trainOnBuffer(aiModel, buffer, 1, 10)
+            -- Можно вывести loss в консоль для дебага
+            -- log(string.format("Loss: %.4f", loss))
+        end)
+    end)
+end
+
+-- Подключаем кнопки
+sendBtn.MouseButton1Click:Connect(onSend)
+textBox.FocusLost:Connect(function(enter)
+    if enter then onSend() end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+    panel.Visible = false
+end)
+-- ============================================================
+-- ЧАСТЬ 12: ФОНОВЫЙ ЦИКЛ ОБУЧЕНИЯ
+-- ============================================================
+-- Пока пользователь играет или просто держит GUI открытым, 
+-- сеть продолжает тренироваться на том, что уже есть в буфере.
+
+local isTraining = true
+local trainThread = nil
+
+local function startBackgroundTraining()
+    if trainThread then return end
+    
+    trainThread = task.spawn(function()
+        while isTraining do
+            -- Ждем, пока в буфере накопится хотя бы 16 примеров
+            if buffer.size >= 16 then
+                -- Тренируем 1 эпоху, батч 16 (чтобы не жрало CPU)
+                local avgLoss = trainOnBuffer(aiModel, buffer, 1, 16)
+                
+                -- Обновляем статус в GUI
+                if status and status.Parent then
+                    status.Text = string.format("Сеть: %d слов | Буфер: %d | Loss: %.3f", 
+                        Vocab.size, buffer.size, avgLoss)
+                end
+            end
+            
+            -- Пауза между эпохами (чтобы не лагало Roblox)
+            task.wait(2)
+        end
+    end)
+end
+
+-- Запускаем фоновое обучение через 2 секунды после инициализации
+task.spawn(function()
+    task.wait(2)
+    if aiModel then
+        startBackgroundTraining()
+        log("Фоновое обучение запущено.")
+    end
+end)
+
+-- Остановка при выгрузке скрипта (чтобы не висел поток)
+gui.Destroying:Connect(function()
+    isTraining = false
+end)
+-- ============================================================
+-- ЧАСТЬ 13: СОХРАНЕНИЕ И ЗАГРУЗКА (СОХРАНЕНИЕ ПАМЯТИ)
+-- ============================================================
+-- Сохраняем веса в формате JSON (через HttpService)
+-- Это позволит ИИ помнить диалоги после перезапуска скрипта.
+
+local HttpService = game:GetService("HttpService")
+local SAVE_FILE = "neuro_ai_weights.json"
+
+-- Функция сохранения (вызывается кнопкой или автоматически)
+local function saveModel()
+    if not aiModel then return end
+    
+    local saveData = {
+        vocab = {
+            words = Vocab.words,
+            reverse = Vocab.reverse,
+            size = Vocab.size
+        },
+        embedding = aiModel.embedding.weights,
+        hidden = {
+            weights = aiModel.hidden.weights,
+            biases = aiModel.hidden.biases
+        },
+        output = {
+            weights = aiModel.output.weights,
+            biases = aiModel.output.biases
+        }
+    }
+    
+    local success, json = pcall(function()
+        return HttpService:JSONEncode(saveData)
+    end)
+    
+    if success and writefile then
+        pcall(writefile, SAVE_FILE, json)
+        log("Модель сохранена в " .. SAVE_FILE)
+        addMessage("(система): память сохранена на диск.", false)
+    end
+end
+
+-- Функция загрузки (вызывается при старте)
+local function loadModel()
+    if not (isfile and isfile(SAVE_FILE)) then return false end
+    
+    local success, data = pcall(function()
+        local raw = readfile(SAVE_FILE)
+        return HttpService:JSONDecode(raw)
+    end)
+    
+    if not success or not data then return false end
+    
+    -- Восстанавливаем словарь
+    Vocab.words = data.vocab.words or {}
+    Vocab.reverse = data.vocab.reverse or {}
+    Vocab.size = data.vocab.size or 0
+    
+    -- Восстанавливаем веса
+    if data.embedding then
+        for i = 1, #data.embedding do
+            aiModel.embedding.weights[i] = data.embedding[i]
+        end
+    end
+    if data.hidden then
+        for i = 1, #data.hidden.weights do
+            aiModel.hidden.weights[i] = data.hidden.weights[i]
+            aiModel.hidden.biases[i] = data.hidden.biases[i]
+        end
+    end
+    if data.output then
+        for i = 1, #data.output.weights do
+            aiModel.output.weights[i] = data.output.weights[i]
+            aiModel.output.biases[i] = data.output.biases[i]
+        end
+    end
+    
+    log("Модель успешно загружена из " .. SAVE_FILE)
+    status.Text = string.format("Память загружена: %d слов", Vocab.size)
+    return true
+end
+
+-- Подключаем загрузку к инициализации (вместо initAI)
+-- Заменяем вызов initAI на комбинированный:
+task.spawn(function()
+    task.wait(1)
+    initAI()
+    loadModel()
+end)
+
+-- Кнопка сохранения (добавим мини-кнопку в заголовок)
+local saveBtn = Instance.new("TextButton")
+saveBtn.Size = UDim2.fromOffset(24, 24)
+saveBtn.Position = UDim2.new(1, -60, 0, 6)
+saveBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 50)
+saveBtn.BorderSizePixel = 0
+saveBtn.Font = Enum.Font.GothamBold
+saveBtn.TextSize = 12
+saveBtn.TextColor3 = Color3.fromRGB(150, 255, 180)
+saveBtn.Text = "S"
+saveBtn.Parent = header
+Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 6)
+
+saveBtn.MouseButton1Click:Connect(function()
+    saveModel()
+end)
+-- ============================================================
+-- ЧАСТЬ 14: ПРЕДЗАПОЛНЕНИЕ И ЗАЩИТА ОТ ОШИБОК
+-- ============================================================
+-- Чтобы модель не выдавала сразу полный бред, 
+-- "скормим" ей базовые фразы для разогрева эмбеддингов.
+
+local function warmupModel()
+    if not aiModel then return end
+    
+    local seedPhrases = {
+        "привет как дела",
+        "я искусственный интеллект",
+        "что ты умеешь",
+        "я умею думать и учиться",
+        "расскажи мне что-нибудь",
+        "я люблю учиться новому",
+    }
+    
+    for _, phrase in ipairs(seedPhrases) do
+        local words = tokenize(phrase)
+        for _, w in ipairs(words) do
+            Vocab:add(w)
+        end
+        
+        -- Формируем контексты
+        for i = 1, #words - 1 do
+            local ctx = {}
+            for j = 1, 5 do
+                local idx = i - 5 + j
+                if idx >= 1 and words[idx] then
+                    table.insert(ctx, Vocab:get(words[idx]))
+                else
+                    table.insert(ctx, 2) -- <pad>
+                end
+            end
+            buffer:add(ctx, Vocab:get(words[i+1]))
+        end
+    end
+    
+    -- Прогоняем 3 эпохи обучения на этих фразах, чтобы веса ожили
+    trainOnBuffer(aiModel, buffer, 3, 8)
+    log("Модель разогрета на базовых фразах.")
+end
+
+-- Безопасный вызов генерации (обертка)
+function NeuralNet:safeGenerate(text, maxTokens, temp)
+    local success, result = pcall(function()
+        return self:generate(text, maxTokens, temp)
+    end)
+    
+    if success and type(result) == "string" and #result > 0 then
+        return result
+    else
+        return "я пока не знаю что ответить, научи меня."
+    end
+end
+
+-- Переопределяем onSend с защитой
+local oldOnSend = onSend
+onSend = function()
+    local text = textBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then return end
+    
+    -- Ограничиваем длину ввода, чтобы не сломать сеть
+    if #text > 100 then
+        text = text:sub(1, 100)
+    end
+    
+    textBox.Text = text
+    oldOnSend()
+end
+
+-- Переподключаем кнопку к безопасному onSend
+sendBtn.MouseButton1Click:Connect(onSend)
+textBox.FocusLost:Connect(function(enter)
+    if enter then onSend() end
+end)
+-- ============================================================
+-- ЧАСТЬ 15: ФИНАЛЬНАЯ СБОРКА И ЗАПУСК
+-- ============================================================
+
+-- Автосохранение каждые 5 минут (чтобы не потерять память)
+task.spawn(function()
+    while true do
+        task.wait(300) -- 5 минут
+        if aiModel and buffer.size > 0 then
+            saveModel()
+        end
+    end
+end)
+
+-- Финальный старт (перезапускаем инициализацию с прогревом)
+task.spawn(function()
+    task.wait(1.5)
+    
+    -- Очищаем статус
+    status.Text = "Запуск нейросети..."
+    
+    -- Инициализация
+    if not aiModel then
+        initAI()
+    end
+    
+    -- Прогрев (только если память не загружена с диска)
+    if buffer.size == 0 then
+        warmupModel()
+    end
+    
+    -- Фоновое обучение
+    startBackgroundTraining()
+    
+    -- Приветствие в чат
+    addMessage("привет. я нейросеть на 1 МБ. я учусь на твоих сообщениях. чем больше пишешь, тем умнее я становлюсь.", false)
+    
+    log("Скрипт полностью загружен и готов к работе.")
+end)
+
+-- Защита от случайного удаления GUI (при выходе из игры)
+LocalPlayer.OnTeleport:Connect(function()
+    isTraining = false
+    saveModel()
+end)
